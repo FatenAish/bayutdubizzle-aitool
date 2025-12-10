@@ -1,10 +1,16 @@
 streamlit
 pandas
+
 langchain-community
-langchain-groq
 langchain-core
+langchain-groq
 langchain-text-splitters
+
 faiss-cpu==1.7.4
 sentence-transformers
+transformers
+torch
+
 python-docx
 pypdf
+lxml
