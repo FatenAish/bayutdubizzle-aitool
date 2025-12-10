@@ -2,12 +2,11 @@ streamlit
 pandas
 
 langchain-community
-langchain-groq
 langchain-core
 langchain-text-splitters
+langchain-openai
 
-sentence-transformers==2.2.2
-faiss-cpu==1.7.4
+faiss-cpu
 
 python-docx
 pypdf
