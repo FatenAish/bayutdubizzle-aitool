@@ -38,7 +38,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-DATA_DIR = "data"
+DATA_DIR = "/app/data"
 INDEX_PATH = os.path.join(DATA_DIR, "faiss_index")
 
 
