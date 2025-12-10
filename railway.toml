@@ -1,7 +1,7 @@
 [build]
 builder = "NIXPACKS"
 
-# 👇 FORCE Railway to include /data folder in deployment
+# 👇 THIS correctly tells Nixpacks to include the /data folder in the image
 [[build.assets]]
 source = "data"
 destination = "/app/data"
