@@ -9,179 +9,161 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-# -------------------------------
-# PAGE CONFIG
-# -------------------------------
+
+# =========================================
+# PAGE SETUP
+# =========================================
 st.set_page_config(
     page_title="Bayut & Dubizzle AI Content Assistant",
     layout="wide"
 )
 
+# Sidebar
+with st.sidebar:
+    st.header("Select an option")
+    mode = st.radio("", ["General", "Bayut", "Dubizzle"])
+
+# Logo + heading
 st.markdown(
     """
-    <h1 style="font-size:32px; font-weight:800; text-align:center; margin-bottom:5px;">
-        <span style="color:#0E8A6D;">Bayut</span> & 
-        <span style="color:#D71920;">Dubizzle</span> AI Content Assistant
+    <h1 style='text-align:center; font-weight:800;'>
+        <span style="color:#0E8A6D;">Bayut</span> &
+        <span style="color:#D71920;">Dubizzle</span>
+        AI Content Assistant
     </h1>
-    <p style="text-align:center; color:#4b5563; font-size:14px; margin-bottom:25px;">
-        Fast internal knowledge search powered by internal content (.txt files in /data).
+    <p style='text-align:center; color:#666;'>
+        Fast internal knowledge search powered by internal content (.txt files in /data)
     </p>
     """,
     unsafe_allow_html=True
 )
 
-# -------------------------------
-# PATHS
-# -------------------------------
 DATA_DIR = "data"
-FAISS_DIR = os.path.join(DATA_DIR, "faiss_store")
+INDEX_PATH = os.path.join(DATA_DIR, "faiss_index")
 
-st.write(f"📁 Using data folder: `{DATA_DIR}`")
 
-# -------------------------------
-# EMBEDDINGS & LLM
-# -------------------------------
-@st.cache_resource
-def get_embeddings():
-    # Uses OpenAI Embeddings – light and no torch
-    return OpenAIEmbeddings(model="text-embedding-3-small")
+# =========================================
+# FUNCTIONS
+# =========================================
 
-@st.cache_resource
-def get_llm():
-    # Make sure OPENAI_API_KEY is set in Railway variables
-    return ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0
-    )
+def build_faiss_index():
+    """
+    Build a FAISS vector index from all .txt files in /data.
+    """
+    files = [f for f in os.listdir(DATA_DIR) if f.endswith(".txt")]
+    if not files:
+        return False
 
-# -------------------------------
-# BUILD / LOAD VECTORSTORE
-# -------------------------------
-def build_vectorstore():
-    """Index all .txt files in /data."""
-    if not os.path.isdir(DATA_DIR):
-        os.makedirs(DATA_DIR, exist_ok=True)
+    documents = []
+    for f in files:
+        loader = TextLoader(os.path.join(DATA_DIR, f))
+        documents.extend(loader.load())
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
+    chunks = splitter.split_documents(documents)
+
+    embeddings = OpenAIEmbeddings()
+    vector_store = FAISS.from_documents(chunks, embeddings)
+
+    vector_store.save_local(INDEX_PATH)
+    return True
+
+
+def load_index():
+    """
+    Load FAISS index if exists.
+    """
+    if not os.path.exists(INDEX_PATH):
         return None
+    embeddings = OpenAIEmbeddings()
+    return FAISS.load_local(INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
 
-    docs = []
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=80
-    )
 
-    for fname in os.listdir(DATA_DIR):
-        path = os.path.join(DATA_DIR, fname)
-        if os.path.isfile(path) and fname.lower().endswith(".txt"):
-            try:
-                loader = TextLoader(path, encoding="utf-8")
-                file_docs = loader.load()
-                docs.extend(splitter.split_documents(file_docs))
-            except Exception:
-                continue
+def rag_query(question):
+    """
+    Perform RAG search + LLM answering.
+    """
+    index = load_index()
+    if index is None:
+        return "Index missing. Please rebuild the index."
 
-    if not docs:
-        return None
+    docs = index.similarity_search(question, k=5)
+    context = "\n\n".join([d.page_content for d in docs])
 
-    vs = FAISS.from_documents(docs, get_embeddings())
-    vs.save_local(FAISS_DIR)
-    return vs
+    prompt = PromptTemplate.from_template("""
+    You are an internal knowledge assistant. Use ONLY the context below to answer.
 
-@st.cache_resource
-def load_or_build_vectorstore():
-    """Load FAISS index if exists; otherwise build a new one."""
-    if os.path.isdir(FAISS_DIR):
-        try:
-            return FAISS.load_local(
-                FAISS_DIR,
-                get_embeddings(),
-                allow_dangerous_deserialization=True
-            )
-        except Exception:
-            pass
-    return build_vectorstore()
+    CONTEXT:
+    {context}
 
-# -------------------------------
-# INIT VECTORSTORE
-# -------------------------------
-vectorstore = load_or_build_vectorstore()
-if vectorstore is None:
-    st.warning("No index built yet. Add .txt files to /data and click 'Rebuild Index'.")
-else:
-    st.success("Vector index is ready ✅")
+    QUESTION:
+    {question}
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) if vectorstore else None
+    ANSWER:
+    """)
 
-# -------------------------------
-# CHAT HISTORY
-# -------------------------------
-if "history" not in st.session_state:
-    st.session_state["history"] = []
+    llm = ChatOpenAI(model="gpt-4o-mini")
+    chain = prompt | llm | StrOutputParser()
 
-# -------------------------------
-# INPUT
-# -------------------------------
-st.subheader("Ask your internal question")
+    return chain.invoke({"context": context, "question": question})
 
-col_q, col_btn = st.columns([4, 1])
-with col_q:
-    user_query = st.text_input("Question", key="question_input")
-with col_btn:
-    ask_clicked = st.button("Ask")
 
-# -------------------------------
-# HANDLE QUESTION
-# -------------------------------
-if ask_clicked and user_query.strip():
-    if retriever is None:
-        st.error("Index not ready. Add .txt files to /data and rebuild the index.")
-    else:
-        with st.spinner("Thinking..."):
-            # Get relevant docs
-            docs = retriever.invoke(user_query)
-            context = "\n\n".join(d.page_content for d in docs)
+# =========================================
+# INDEX STATUS MESSAGE (CUSTOM UI)
+# =========================================
 
-            prompt = PromptTemplate.from_template(
-                "Use ONLY the context below to answer the question.\n"
-                "If you don't find the answer, say you don't know based on internal docs.\n\n"
-                "Context:\n{context}\n\n"
-                "Question: {question}\n\n"
-                "Answer in one clear paragraph:"
+index_exists = os.path.exists(INDEX_PATH)
+
+st.markdown(f"""
+<div style="
+    background:#FFF4D1;
+    padding:15px;
+    border:1px solid #FFE19C;
+    border-radius:8px;
+    color:#444;
+    font-size:16px;
+    margin-bottom:15px;">
+    📁 <b>DATA DIR:</b> /app/data <br>
+    {'🟢 Index is ready.' if index_exists else '🟡 No index found — add .txt files and click Rebuild Index.'}
+</div>
+""", unsafe_allow_html=True)
+
+
+# =========================================
+# MAIN UI (Same for all modes)
+# =========================================
+
+if mode == "General":
+    st.subheader("Ask your internal question")
+
+    question = st.text_input("Question")
+
+    if st.button("Ask"):
+        if not index_exists:
+            st.error("⚠ Please rebuild index first.")
+        else:
+            answer = rag_query(question)
+            st.markdown(
+                f"""
+                <div style='background:#F7F7F7; padding:15px;
+                border-radius:8px; border:1px solid #DDD; margin-top:15px;'>
+                    <b>Answer:</b><br>{answer}
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
-            chain = prompt | get_llm() | StrOutputParser()
-            answer = chain.invoke({"context": context, "question": user_query})
+    # Rebuild index button
+    if st.button("Rebuild Index"):
+        with st.spinner("Rebuilding FAISS index..."):
+            success = build_faiss_index()
+            if success:
+                st.success("Index rebuilt successfully! Refresh page.")
+            else:
+                st.error("No .txt files found in /data folder.")
 
-        # Save to history
-        st.session_state["history"].append(
-            {"q": user_query, "a": answer, "sources": docs}
-        )
+elif mode == "Bayut":
+    st.markdown("<h2 style='color:#0E8A6D;'>Bayut Module (coming soon)</h2>", unsafe_allow_html=True)
 
-# -------------------------------
-# SHOW CHAT HISTORY (oldest at bottom)
-# -------------------------------
-st.markdown("---")
-st.markdown("### Conversation")
-
-# Show from oldest to newest
-for item in st.session_state["history"]:
-    st.markdown(f"**❓ Question:** {item['q']}")
-    st.markdown(f"**✅ Answer:** {item['a']}")
-    if item["sources"]:
-        with st.expander("📎 Evidence from documents"):
-            for i, d in enumerate(item["sources"], 1):
-                st.markdown(f"**{i}. Source:** {d.metadata.get('source', 'Unknown')}")
-                st.write(d.page_content[:500] + "...")
-    st.markdown("---")
-
-# -------------------------------
-# REBUILD INDEX BUTTON
-# -------------------------------
-if st.button("🔄 Rebuild Index"):
-    with st.spinner("Rebuilding vector index from /data..."):
-        # Clear cache for vectorstore
-        load_or_build_vectorstore.clear()
-        vs_new = load_or_build_vectorstore()
-    if vs_new is None:
-        st.error("No .txt documents found in /data. Add files and try again.")
-    else:
-        st.success("Index rebuilt successfully! ✅")
+elif mode == "Dubizzle":
+    st.markdown("<h2 style='color:#D71920;'>Dubizzle Module (coming soon)</h2>", unsafe_allow_html=True)
