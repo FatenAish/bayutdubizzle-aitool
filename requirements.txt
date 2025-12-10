@@ -11,6 +11,3 @@ faiss-cpu==1.7.4
 
 python-docx
 pypdf
-
-# FORCE CPU TORCH — NO CUDA!
-torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu
