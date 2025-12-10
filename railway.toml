@@ -1,0 +1,10 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "streamlit run app.py --server.port=$PORT --server.address=0.0.0.0"
+
+# 👇 THIS FORCES RAILWAY TO INCLUDE YOUR /data FOLDER
+[[build.copy]]
+source = "data"
+destination = "/app/data"
