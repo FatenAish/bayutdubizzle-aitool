@@ -1,263 +1,187 @@
-# ============================================================
-# app.py – Dubizzle Group AI Content Lab
-# FULL WORKING VERSION (FASTEST + CHAT + EVIDENCE + RAG)
-# ============================================================
-
 import os
-import shutil
-import pandas as pd
 import streamlit as st
 
-# ==============================================
-# PAGE CONFIG
-# ==============================================
-st.set_page_config(page_title="Dubizzle Group AI Content Lab", layout="wide")
-
-# ==============================================
-# GLOBAL CLEAN CSS
-# ==============================================
-st.markdown("""
-<style>
-[data-testid="stVerticalBlock"] > div {
-  background: transparent !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-}
-main .block-container { padding-top: 0rem !important; }
-.header-wrapper { text-align: center !important; width: 100%; }
-.header-title { font-size: 32px; font-weight: 900; color: #111827; }
-.header-title .red { color: #D92C27 !important; }
-.header-sub { font-size: 15px; color: #4b5563; margin-bottom: 20px !important; }
-
-.bubble { 
-  padding: 12px 16px; 
-  border-radius: 14px; 
-  margin: 6px 0; 
-  max-width: 85%; 
-  line-height: 1.5;
-  font-size: 15px;
-}
-.bubble.user { background: #f2f2f2; margin-left: auto; }
-.bubble.ai { background: #ffffff; margin-right: auto; }
-
-.evidence { 
-  background:#fafafa; 
-  border:1px solid #e5e7eb; 
-  border-radius:12px; 
-  padding:10px; 
-  margin:10px 0; 
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ==============================================
-# HEADER
-# ==============================================
-st.markdown('<div class="header-wrapper">', unsafe_allow_html=True)
-st.markdown('<div class="header-title"><span class="red">Dubizzle Group</span> AI Content Lab</div>', unsafe_allow_html=True)
-st.markdown('<div class="header-sub">Internal AI-powered content platform for Bayut & Dubizzle teams</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ==============================================
-# SIDEBAR TOOL SELECTOR
-# ==============================================
-tool = st.sidebar.selectbox(
-    "Choose a tool",
-    [
-        "LPV Rewriter",
-        "Guidelines Checker",
-        "Arabic Grammar Fixer",
-        "English Grammar Fixer",
-        "Content Brief Generator",
-        "Trend Analyzer",
-        "Sheet Analyzer",
-        "Internal RAG",
-    ],
-)
-
-# Placeholder Tools
-if tool != "Internal RAG":
-    st.subheader(f"{tool}")
-    st.write("🚧 Coming soon")
-    st.stop()
-
-# =====================================================================
-# ✅✅✅ INTERNAL RAG (FASTEST, CLEANEST, CHATGPT-STYLE CHAT)
-# =====================================================================
-
-st.subheader("Internal Knowledge Base (Local RAG)")
-st.caption("FAST RAG • Uses documents from /data • Delete /data/faiss_store to rebuild")
-
-# ✅ Correct imports
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
-from langchain_community.document_loaders import (
-    PyPDFLoader, Docx2txtLoader, TextLoader, CSVLoader
-)
+from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 
-# ====== CONFIG ======
-DATA_DIR = "data"
-INDEX_DIR = os.path.join(DATA_DIR, "faiss_store")
+# -------------------------------
+# PAGE CONFIG
+# -------------------------------
+st.set_page_config(
+    page_title="Bayut & Dubizzle AI Content Assistant",
+    layout="wide"
+)
 
-# ✅ Embeddings
+st.markdown(
+    """
+    <h1 style="font-size:32px; font-weight:800; text-align:center; margin-bottom:5px;">
+        <span style="color:#0E8A6D;">Bayut</span> & 
+        <span style="color:#D71920;">Dubizzle</span> AI Content Assistant
+    </h1>
+    <p style="text-align:center; color:#4b5563; font-size:14px; margin-bottom:25px;">
+        Fast internal knowledge search powered by internal content (.txt files in /data).
+    </p>
+    """,
+    unsafe_allow_html=True
+)
+
+# -------------------------------
+# PATHS
+# -------------------------------
+DATA_DIR = "data"
+FAISS_DIR = os.path.join(DATA_DIR, "faiss_store")
+
+st.write(f"📁 Using data folder: `{DATA_DIR}`")
+
+# -------------------------------
+# EMBEDDINGS & LLM
+# -------------------------------
 @st.cache_resource
 def get_embeddings():
-    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-# ✅ Working Groq LLM
-def get_local_llm():
-    return ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.1
-    )
-
-# ====== LOAD DOCUMENTS ======
-def load_document(path):
-    ext = os.path.splitext(path)[1].lower()
-    try:
-        if ext == ".pdf": return PyPDFLoader(path).load()
-        if ext == ".docx": return Docx2txtLoader(path).load()
-        if ext in [".txt", ".md"]: return TextLoader(path).load()
-        if ext == ".csv": return CSVLoader(path, encoding="utf-8").load()
-        if ext == ".xlsx":
-            df = pd.read_excel(path)
-            return [{"page_content": df.to_string(), "metadata": {"source": path}}]
-    except:
-        print("Skipping bad file:", path)
-    return []
-
-def load_default_docs():
-    docs = []
-    if not os.path.isdir(DATA_DIR): return docs
-    for f in os.listdir(DATA_DIR):
-        if f == "faiss_store": continue
-        p = os.path.join(DATA_DIR, f)
-        if os.path.isfile(p):
-            docs.extend(load_document(p))
-    return docs
-
-def faiss_exists():
-    return os.path.isdir(INDEX_DIR)
-
-def save_faiss(store):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    store.save_local(INDEX_DIR)
-
-def load_faiss():
-    return FAISS.load_local(
-        INDEX_DIR,
-        get_embeddings(),
-        allow_dangerous_deserialization=True
-    )
+    # Uses OpenAI Embeddings – light and no torch
+    return OpenAIEmbeddings(model="text-embedding-3-small")
 
 @st.cache_resource
-def build_vectorstore(docs):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=250, chunk_overlap=50)
-    chunks = splitter.split_documents(docs)
-    texts = [c.page_content for c in chunks]
-    return FAISS.from_texts(texts, get_embeddings())
+def get_llm():
+    # Make sure OPENAI_API_KEY is set in Railway variables
+    return ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0
+    )
 
-# ===== BUTTONS =====
-c1, c2 = st.columns([1, 1])
+# -------------------------------
+# BUILD / LOAD VECTORSTORE
+# -------------------------------
+def build_vectorstore():
+    """Index all .txt files in /data."""
+    if not os.path.isdir(DATA_DIR):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        return None
 
-if c1.button("🔄 Rebuild Index"):
-    if os.path.isdir(INDEX_DIR):
-        shutil.rmtree(INDEX_DIR)
-    st.cache_resource.clear()
-    st.success("Index cleared. Restart app to rebuild.")
-    st.stop()
+    docs = []
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=80
+    )
 
-if c2.button("🧹 Clear Chat"):
-    st.session_state.pop("rag_history", None)
-    st.rerun()
+    for fname in os.listdir(DATA_DIR):
+        path = os.path.join(DATA_DIR, fname)
+        if os.path.isfile(path) and fname.lower().endswith(".txt"):
+            try:
+                loader = TextLoader(path, encoding="utf-8")
+                file_docs = loader.load()
+                docs.extend(splitter.split_documents(file_docs))
+            except Exception:
+                continue
 
-# ===== LOAD OR CREATE INDEX =====
-if faiss_exists():
-    with st.spinner("Loading FAISS index..."):
-        vectorstore = load_faiss()
-    st.success("✅ Index loaded")
-else:
-    docs = load_default_docs()
     if not docs:
-        st.error("❌ No documents in /data")
-        st.stop()
+        return None
 
-    with st.spinner("Indexing documents..."):
-        vectorstore = build_vectorstore(docs)
-        save_faiss(vectorstore)
+    vs = FAISS.from_documents(docs, get_embeddings())
+    vs.save_local(FAISS_DIR)
+    return vs
 
-    st.success("✅ Index created")
-
-# ===== CHAT HISTORY =====
-if "rag_history" not in st.session_state:
-    st.session_state["rag_history"] = []
-
-for q, a in st.session_state["rag_history"]:
-    st.markdown(f"<div class='bubble user'>{q}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='bubble ai'>{a}</div>", unsafe_allow_html=True)
-
-# ===== ASK A QUESTION =====
-query = st.text_input("Ask your question:")
-
-if query:
-
-    with st.spinner("Thinking..."):
-
-        # Evidence preview
-        hits = vectorstore.similarity_search_with_score(str(query), k=3)
-
-        # ✅ Stable retriever
-        rag_retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-
-        # ✅ Stage 1 — Extract only the text from dict input
-        extract_question = RunnableLambda(lambda x: x["question"])
-
-        # ✅ Stage 2 — Pass the string to retriever
-        retrieve_docs = extract_question | rag_retriever
-
-        # ✅ Stage 3 — Process retrieved docs
-        prepare_context = RunnableLambda(
-            lambda docs: "\n\n".join(d.page_content[:1500] for d in docs)
-        )
-
-        # ✅ Combine retrieval pipeline
-        context_pipeline = retrieve_docs | prepare_context
-
-        # ✅ Prompt
-        prompt = PromptTemplate.from_template(
-            "Use ONLY this context to answer:\n\n{context}\n\nQuestion: {question}\n\nAnswer:"
-        )
-
-        # ✅ FINAL CHAIN
-        chain = (
-            {
-                "context": context_pipeline,
-                "question": RunnablePassthrough(),
-            }
-            | prompt
-            | get_local_llm()
-            | StrOutputParser()
-        )
-
-        answer = chain.invoke({"question": query})
-
-    # ✅ UI — chat history
-    st.session_state.setdefault("rag_history", []).append((query, answer))
-    st.markdown(f"<div class='bubble user'>{query}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='bubble ai'>{answer}</div>", unsafe_allow_html=True)
-
-    # ✅ Evidence output
-    if hits:
-        st.markdown("### 📎 Evidence")
-        for i, (doc, score) in enumerate(hits, 1):
-            snippet = doc.page_content[:400]
-            st.markdown(
-                f"<div class='evidence'><b>{i}.</b> similarity={score:.3f}<br>{snippet}...</div>",
-                unsafe_allow_html=True
+@st.cache_resource
+def load_or_build_vectorstore():
+    """Load FAISS index if exists; otherwise build a new one."""
+    if os.path.isdir(FAISS_DIR):
+        try:
+            return FAISS.load_local(
+                FAISS_DIR,
+                get_embeddings(),
+                allow_dangerous_deserialization=True
             )
+        except Exception:
+            pass
+    return build_vectorstore()
+
+# -------------------------------
+# INIT VECTORSTORE
+# -------------------------------
+vectorstore = load_or_build_vectorstore()
+if vectorstore is None:
+    st.warning("No index built yet. Add .txt files to /data and click 'Rebuild Index'.")
+else:
+    st.success("Vector index is ready ✅")
+
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) if vectorstore else None
+
+# -------------------------------
+# CHAT HISTORY
+# -------------------------------
+if "history" not in st.session_state:
+    st.session_state["history"] = []
+
+# -------------------------------
+# INPUT
+# -------------------------------
+st.subheader("Ask your internal question")
+
+col_q, col_btn = st.columns([4, 1])
+with col_q:
+    user_query = st.text_input("Question", key="question_input")
+with col_btn:
+    ask_clicked = st.button("Ask")
+
+# -------------------------------
+# HANDLE QUESTION
+# -------------------------------
+if ask_clicked and user_query.strip():
+    if retriever is None:
+        st.error("Index not ready. Add .txt files to /data and rebuild the index.")
+    else:
+        with st.spinner("Thinking..."):
+            # Get relevant docs
+            docs = retriever.invoke(user_query)
+            context = "\n\n".join(d.page_content for d in docs)
+
+            prompt = PromptTemplate.from_template(
+                "Use ONLY the context below to answer the question.\n"
+                "If you don't find the answer, say you don't know based on internal docs.\n\n"
+                "Context:\n{context}\n\n"
+                "Question: {question}\n\n"
+                "Answer in one clear paragraph:"
+            )
+
+            chain = prompt | get_llm() | StrOutputParser()
+            answer = chain.invoke({"context": context, "question": user_query})
+
+        # Save to history
+        st.session_state["history"].append(
+            {"q": user_query, "a": answer, "sources": docs}
+        )
+
+# -------------------------------
+# SHOW CHAT HISTORY (oldest at bottom)
+# -------------------------------
+st.markdown("---")
+st.markdown("### Conversation")
+
+# Show from oldest to newest
+for item in st.session_state["history"]:
+    st.markdown(f"**❓ Question:** {item['q']}")
+    st.markdown(f"**✅ Answer:** {item['a']}")
+    if item["sources"]:
+        with st.expander("📎 Evidence from documents"):
+            for i, d in enumerate(item["sources"], 1):
+                st.markdown(f"**{i}. Source:** {d.metadata.get('source', 'Unknown')}")
+                st.write(d.page_content[:500] + "...")
+    st.markdown("---")
+
+# -------------------------------
+# REBUILD INDEX BUTTON
+# -------------------------------
+if st.button("🔄 Rebuild Index"):
+    with st.spinner("Rebuilding vector index from /data..."):
+        # Clear cache for vectorstore
+        load_or_build_vectorstore.clear()
+        vs_new = load_or_build_vectorstore()
+    if vs_new is None:
+        st.error("No .txt documents found in /data. Add files and try again.")
+    else:
+        st.success("Index rebuilt successfully! ✅")
