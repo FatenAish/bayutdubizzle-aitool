@@ -1,10 +1,16 @@
 streamlit
 pandas
+
 langchain-community
 langchain-groq
 langchain-core
 langchain-text-splitters
-sentence-transformers
-faiss-cpu
+
+sentence-transformers==2.2.2
+faiss-cpu==1.7.4
+
 python-docx
 pypdf
+
+# FORCE CPU TORCH — NO CUDA!
+torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu
